@@ -1,0 +1,290 @@
+import pandas as pd
+import glob
+import os
+import re
+from datetime import timedelta
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Folder containing the CSV files
+INPUT_FOLDER = "./input"
+
+# Output CSV file
+OUTPUT_FILE = "./output/matching_rows.csv"
+
+
+# ------------------------------------------------------------
+# CHOOSE WHICH COLUMN TO SEARCH
+# ------------------------------------------------------------
+# Use either:
+#     "activity name"
+# or:
+#     "pipeline name"
+
+SEARCH_COLUMN = "activity name"
+
+
+# ------------------------------------------------------------
+# VALUES TO SEARCH FOR
+# ------------------------------------------------------------
+
+SEARCH_VALUES = [
+    "Activity 1",
+    "Activity 2",
+    "Activity 3"
+]
+
+
+# ============================================================
+# FUNCTION TO CONVERT DURATION TO TIMEDELTA
+# ============================================================
+
+def parse_duration(duration):
+    """
+    Converts durations such as:
+
+        9m54s
+        2h2m30s
+        1h
+        45m
+        30s
+
+    into a Python timedelta object.
+    """
+
+    if pd.isna(duration):
+        return pd.NaT
+
+    duration = str(duration).strip().lower()
+
+    hours = 0
+    minutes = 0
+    seconds = 0
+
+    # Find hours
+    hour_match = re.search(r"(\d+)\s*h", duration)
+    if hour_match:
+        hours = int(hour_match.group(1))
+
+    # Find minutes
+    minute_match = re.search(r"(\d+)\s*m", duration)
+    if minute_match:
+        minutes = int(minute_match.group(1))
+
+    # Find seconds
+    second_match = re.search(r"(\d+)\s*s", duration)
+    if second_match:
+        seconds = int(second_match.group(1))
+
+    return timedelta(
+        hours=hours,
+        minutes=minutes,
+        seconds=seconds
+    )
+
+
+# ============================================================
+# 1. FIND ALL CSV FILES
+# ============================================================
+
+csv_files = glob.glob(
+    os.path.join(INPUT_FOLDER, "*.csv")
+)
+
+if not csv_files:
+    print("ERROR: No CSV files found in the input folder.")
+    exit()
+
+print(f"Found {len(csv_files)} CSV files.")
+
+
+# ============================================================
+# 2. READ ALL CSV FILES
+# ============================================================
+
+dataframes = []
+
+for file in csv_files:
+
+    print(f"Reading: {file}")
+
+    try:
+        df = pd.read_csv(file)
+
+        dataframes.append(df)
+
+    except Exception as e:
+
+        print(f"ERROR reading {file}: {e}")
+
+
+if not dataframes:
+    print("ERROR: Could not read any CSV files.")
+    exit()
+
+
+# ============================================================
+# 3. CONCATENATE ALL CSV FILES
+# ============================================================
+
+full_data = pd.concat(
+    dataframes,
+    ignore_index=True,
+    sort=False
+)
+
+print()
+print("CSV files successfully concatenated.")
+
+print(f"Total rows: {len(full_data)}")
+print(f"Total columns: {len(full_data.columns)}")
+
+
+# ============================================================
+# 4. CHECK REQUIRED COLUMNS
+# ============================================================
+
+required_columns = [
+    SEARCH_COLUMN,
+    "run start",
+    "duration"
+]
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column not in full_data.columns
+]
+
+if missing_columns:
+
+    print()
+    print("ERROR: The following columns are missing:")
+
+    for column in missing_columns:
+        print(f"  - {column}")
+
+    print()
+    print("Available columns:")
+
+    for column in full_data.columns:
+        print(f"  - {column}")
+
+    exit()
+
+
+# ============================================================
+# 5. FILTER ROWS
+# ============================================================
+
+# Convert both the CSV values and search values to strings
+# so that numbers and strings can match correctly.
+
+search_values_as_string = [
+    str(value).strip()
+    for value in SEARCH_VALUES
+]
+
+full_data[SEARCH_COLUMN] = (
+    full_data[SEARCH_COLUMN]
+    .astype(str)
+    .str.strip()
+)
+
+
+matching_rows = full_data[
+    full_data[SEARCH_COLUMN].isin(
+        search_values_as_string
+    )
+].copy()
+
+
+print()
+print(f"Matching rows found: {len(matching_rows)}")
+
+
+# ============================================================
+# 6. CONVERT RUN START TO DATETIME
+# ============================================================
+
+matching_rows["run start datetime"] = pd.to_datetime(
+    matching_rows["run start"],
+    format="%d/%m/%Y",
+    errors="coerce"
+)
+
+
+# ============================================================
+# 7. CALCULATE RUN END
+# ============================================================
+
+matching_rows["run end datetime"] = (
+    matching_rows["run start datetime"]
+    + matching_rows["duration"].apply(parse_duration)
+)
+
+
+# ============================================================
+# 8. FORMAT RUN END AS DD/MM/YYYY
+# ============================================================
+
+matching_rows["run end"] = (
+    matching_rows["run end datetime"]
+    .dt.strftime("%d/%m/%Y")
+)
+
+
+# ============================================================
+# 9. REMOVE TEMPORARY COLUMNS
+# ============================================================
+
+matching_rows.drop(
+    columns=[
+        "run start datetime",
+        "run end datetime"
+    ],
+    inplace=True
+)
+
+
+# ============================================================
+# 10. CREATE OUTPUT FOLDER
+# ============================================================
+
+output_folder = os.path.dirname(OUTPUT_FILE)
+
+if output_folder:
+    os.makedirs(
+        output_folder,
+        exist_ok=True
+    )
+
+
+# ============================================================
+# 11. SAVE RESULT
+# ============================================================
+
+matching_rows.to_csv(
+    OUTPUT_FILE,
+    index=False
+)
+
+
+# ============================================================
+# 12. FINAL RESULT
+# ============================================================
+
+print()
+print("========================================")
+print("DONE")
+print("========================================")
+
+print(f"Matching rows : {len(matching_rows)}")
+print(f"Output file   : {OUTPUT_FILE}")
+
+print()
+print("Run End has been calculated using:")
+print("Run End = Run Start + Duration")
